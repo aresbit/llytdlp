@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# Check if user input is provided
+if [ -z "$*" ]; then
+    echo "Requires a prompt of what you want to download, i.e."
+    echo '"llytdlp download this YouTube video https://www.youtube.com/watch?v=..."'
+    exit 1
+fi
+
+# Capture command-line arguments
+user_input="$*"
+
+# Conditional check for API keys
+if [ -n "$DEEPSEEK_API_KEY" ]; then
+    # Store the curl response as a variable for Deepseek API
+    response=$(curl -s "https://api.deepseek.com/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
+        -d "{
+            \"model\": \"deepseek-chat\",
+            \"messages\": [
+                {
+                    \"role\": \"system\",
+                    \"content\": \"You are a yt-dlp command generator. Based on the user's description, generate only the appropriate yt-dlp command line without any additional explanation. Use sensible output file names based on video title or as specified by user. For single videos, use current directory as output location. For playlists, create a subdirectory with playlist name. For audio extraction, include appropriate audio options. For subtitles, include subtitle download options when requested. Use safe defaults: --ignore-errors --no-overwrites. Always specify output template with meaningful names. Use best quality by default unless user specifies otherwise. Answer with a single line command without explanations or markdown formatting. Only output the command itself.\"
+                },
+                {
+                    \"role\": \"user\",
+                    \"content\": \"$user_input\"
+                }
+            ],
+            \"temperature\": 0.3,
+            \"max_tokens\": 1024,
+            \"top_p\": 1,
+            \"stream\": false
+        }")
+elif [ -n "$KIMI_API_KEY" ]; then
+    # Store the curl response as a variable for Kimi API (Moonshot AI)
+    response=$(curl -s "https://api.moonshot.cn/v1/chat/completions" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${KIMI_API_KEY}" \
+        -d "{
+            \"model\": \"kimi-k2-0711-preview\",
+            \"messages\": [
+                {
+                    \"role\": \"system\",
+                    \"content\": \"You are a yt-dlp command generator. Based on the user's description, generate only the appropriate yt-dlp command line without any additional explanation. Use sensible output file names based on video title or as specified by user. For single videos, use current directory as output location. For playlists, create a subdirectory with playlist name. For audio extraction, include appropriate audio options. For subtitles, include subtitle download options when requested. Use safe defaults: --ignore-errors --no-overwrites. Always specify output template with meaningful names. Use best quality by default unless user specifies otherwise. Answer with a single line command without explanations or markdown formatting. Only output the command itself.\"
+                },
+                {
+                    \"role\": \"user\",
+                    \"content\": \"$user_input\"
+                }
+            ],
+            \"temperature\": 0.3,
+            \"max_tokens\": 1024,
+            \"top_p\": 1,
+            \"stream\": false
+        }")
+else
+    echo "No API key found. Please set DEEPSEEK_API_KEY or KIMI_API_KEY."
+    exit 1
+fi
+
+# Parse the "content" field from the response using grep and sed, ignoring escaped quotes
+content=$(echo "$response" | grep -o '"content": *"[^"\\]*\(\\.[^"\\]*\)*"')
+
+# Remove the content prefix
+command=$(echo "$content" | sed 's/"content": *"//;s/"$//')
+
+# Remove backslashes from escaped quotes
+command=$(echo "$command" | sed 's/\\"/"/g')
+
+# Check if content is empty or null
+if [ -z "$content" ]; then
+    echo "Error: No command generated or API response is empty."
+    exit 1
+fi
+
+# Echo the command
+echo "Generated command: $command"
+
+# Prompt the user to run the command
+read -p "Press Enter to run the command, or Ctrl+C to cancel..."
+
+# Run the command
+eval "$command"
