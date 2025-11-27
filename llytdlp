@@ -7,8 +7,12 @@ if [ -z "$*" ]; then
     exit 1
 fi
 
-# Capture command-line arguments
+# Capture command-line arguments and escape for JSON
 user_input="$*"
+
+# Escape special characters for JSON
+# Replace backslash first, then other special characters
+user_input_escaped=$(echo "$user_input" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | sed 's/\n/\\n/g')
 
 # Conditional check for API keys
 if [ -n "$DEEPSEEK_API_KEY" ]; then
@@ -25,7 +29,7 @@ if [ -n "$DEEPSEEK_API_KEY" ]; then
                 },
                 {
                     \"role\": \"user\",
-                    \"content\": \"$user_input\"
+                    \"content\": \"$user_input_escaped\"
                 }
             ],
             \"temperature\": 0.3,
@@ -48,7 +52,7 @@ elif [ -n "$KIMI_API_KEY" ]; then
                 },
                 {
                     \"role\": \"user\",
-                    \"content\": \"$user_input\"
+                    \"content\": \"$user_input_escaped\"
                 }
             ],
             \"temperature\": 0.3,
@@ -61,23 +65,67 @@ else
     exit 1
 fi
 
-# Parse the "content" field from the response using grep and sed, ignoring escaped quotes
-content=$(echo "$response" | grep -o '"content": *"[^"\\]*\(\\.[^"\\]*\)*"')
+# Debug: Show raw response (comment out in production)
+echo "Debug - API Response:"
+echo "$response"
+echo "---"
 
-# Remove the content prefix
-command=$(echo "$content" | sed 's/"content": *"//;s/"$//')
+# Check if response is empty
+if [ -z "$response" ]; then
+    echo "Error: API returned empty response."
+    exit 1
+fi
 
-# Remove backslashes from escaped quotes
-command=$(echo "$command" | sed 's/\\"/"/g')
+# Check for API error
+if echo "$response" | grep -q '"error"'; then
+    echo "Error: API returned an error:"
+    echo "$response" | grep -o '"message":"[^"]*"' | sed 's/"message":"//;s/"$//'
+    exit 1
+fi
 
-# Check if content is empty or null
-if [ -z "$content" ]; then
-    echo "Error: No command generated or API response is empty."
+# Try multiple methods to extract content
+# Method 1: Using Python (most reliable)
+if command -v python3 &> /dev/null; then
+    command=$(echo "$response" | python3 -c "
+import sys
+import json
+try:
+    data = json.load(sys.stdin)
+    content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+    print(content.strip())
+except:
+    pass
+")
+fi
+
+# Method 2: Using jq if available
+if [ -z "$command" ] && command -v jq &> /dev/null; then
+    command=$(echo "$response" | jq -r '.choices[0].message.content' 2>/dev/null)
+fi
+
+# Method 3: Improved grep/sed method
+if [ -z "$command" ] || [ "$command" = "null" ]; then
+    # Extract everything between "content":" and the next "
+    command=$(echo "$response" | sed -n 's/.*"content"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    # Handle escaped characters
+    command=$(echo "$command" | sed 's/\\n/\n/g; s/\\t/\t/g; s/\\"/"/g; s/\\\\/\\/g')
+fi
+
+# Clean up the command (remove markdown code blocks if present)
+command=$(echo "$command" | sed 's/^```.*$//g; s/^`//g; s/`$//g' | grep -v '^$' | head -1)
+
+# Check if command extraction was successful
+if [ -z "$command" ] || [ "$command" = "null" ]; then
+    echo "Error: Failed to extract command from API response."
+    echo "Raw response was:"
+    echo "$response"
     exit 1
 fi
 
 # Echo the command
+echo ""
 echo "Generated command: $command"
+echo ""
 
 # Prompt the user to run the command
 read -p "Press Enter to run the command, or Ctrl+C to cancel..."
